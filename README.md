@@ -57,9 +57,33 @@ npm start
 
 ## API Endpoints
 
+### POST /api/generate/thumbnails
+
+Generate multiple YouTube thumbnails from an uploaded photo (matches frontend).
+
+**Request:** `multipart/form-data`
+```
+photo: File (required, max 10MB, image files only)
+videoType: string (e.g., "Gaming", "Tutorial")
+style: string (e.g., "Flashy", "Minimal")
+mood: string (e.g., "Exciting", "Funny")
+placement: string (e.g., "left", "center", "right")
+```
+
+**Response:**
+```json
+{
+  "thumbnails": [
+    "https://image-url-1...",
+    "https://image-url-2...",
+    "https://image-url-3..."
+  ]
+}
+```
+
 ### POST /api/generate/thumbnail
 
-Generate a YouTube thumbnail from a topic.
+Generate a single YouTube thumbnail from a text topic (backward compatible).
 
 **Request Body:**
 ```json
