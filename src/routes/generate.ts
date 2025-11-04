@@ -7,7 +7,7 @@ import { bufferToDataURL, generatePromptVariations } from '../utils/imageProcess
 const router = Router();
 
 // POST /api/generate-thumbnails (matches frontend)
-router.post('/thumbnails', upload.single('photo'), async (req: Request, res: Response) => {
+router.post('/generate-thumbnails', upload.single('photo'), async (req: Request, res: Response) => {
     try {
         const { videoType, style, mood, placement } = req.body;
         const file = req.file;
