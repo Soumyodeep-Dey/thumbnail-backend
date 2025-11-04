@@ -22,7 +22,7 @@ router.post('/generate-thumbnails', upload.single('photo'), async (req: Request,
         // Create a description based on the video type
         const photoDescription = `Photo uploaded for ${videoType || 'YouTube'} thumbnail`;
 
-        // Generate 3 prompt variations
+        // Generate 3 prompt variations (we'll generate images sequentially to avoid rate limits)
         const promptVariations = generatePromptVariations(
             photoDescription,
             videoType || 'YouTube video',
@@ -31,21 +31,30 @@ router.post('/generate-thumbnails', upload.single('photo'), async (req: Request,
             placement || 'center'
         );
 
-        // Generate thumbnails using OpenAI-enhanced prompts
-        const thumbnailPromises = promptVariations.map(async (basePrompt) => {
-            // Enhance prompt with OpenAI
-            const enhancedPrompt = await generateThumbnailPrompt(
-                basePrompt,
-                style,
-                mood
-            );
+        // Generate thumbnails using OpenAI-enhanced prompts (sequentially to avoid rate limits)
+        const thumbnails: string[] = [];
 
-            // Generate image
-            const imageUrl = await generateImage(enhancedPrompt);
-            return imageUrl;
-        });
+        for (const basePrompt of promptVariations) {
+            try {
+                // Enhance prompt with OpenAI
+                const enhancedPrompt = await generateThumbnailPrompt(
+                    basePrompt,
+                    style,
+                    mood
+                );
 
-        const thumbnails = await Promise.all(thumbnailPromises);
+                // Generate image using DALL-E 3
+                const imageUrl = await generateImage(enhancedPrompt);
+                thumbnails.push(imageUrl);
+            } catch (error) {
+                console.error('Error generating thumbnail:', error);
+                // Continue with other variations even if one fails
+            }
+        }
+
+        if (thumbnails.length === 0) {
+            throw new Error('Failed to generate any thumbnails');
+        }
 
         res.status(200).json({
             thumbnails,

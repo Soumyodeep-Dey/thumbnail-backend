@@ -1,53 +1,64 @@
-import axios from 'axios';
-
-const NANOBANANA_API_URL = 'https://api.nanobanana.ai/v1/images/generations';
-
-interface NanoBananaResponse {
-    data: Array<{
-        url: string;
-    }>;
-}
+import { GoogleGenAI } from "@google/genai";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 export async function generateImage(prompt: string): Promise<string> {
     try {
-        const apiKey = process.env.NANOBANANA_API_KEY;
+        const apiKey = process.env.GOOGLE_API_KEY || process.env.NANOBANANA_API_KEY;
 
         if (!apiKey) {
-            throw new Error('NANOBANANA_API_KEY is not configured');
+            throw new Error('GOOGLE_API_KEY is not configured in environment variables');
         }
 
-        const response = await axios.post<NanoBananaResponse>(
-            NANOBANANA_API_URL,
-            {
-                prompt,
-                model: 'flux-pro',
-                width: 1280,
-                height: 720,
-                steps: 30,
-                guidance_scale: 7.5,
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 60000, // 60 second timeout
+        // Initialize Google GenAI with the API key
+        const ai = new GoogleGenAI({
+            apiKey: apiKey
+        });
+
+        // Generate image using Gemini 2.5 Flash Image model
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash-image",
+            contents: prompt,
+        });
+
+        // Extract image data from response
+        const parts = response.candidates?.[0]?.content?.parts;
+
+        if (!parts || parts.length === 0) {
+            throw new Error('No content returned from Gemini API');
+        }
+
+        for (const part of parts) {
+            if (part.inlineData) {
+                const imageData = part.inlineData.data;
+                if (!imageData) {
+                    throw new Error('Image data is undefined');
+                }
+                const buffer = Buffer.from(imageData, "base64");
+
+                // Create a unique filename
+                const timestamp = Date.now();
+                const filename = `thumbnail-${timestamp}.png`;
+                const uploadsDir = path.join(process.cwd(), 'uploads');                // Create uploads directory if it doesn't exist
+                if (!fs.existsSync(uploadsDir)) {
+                    fs.mkdirSync(uploadsDir, { recursive: true });
+                }
+
+                const filepath = path.join(uploadsDir, filename);
+                fs.writeFileSync(filepath, buffer);
+
+                console.log(`Image saved as ${filename}`);
+
+                // Return the full URL that can be accessed from frontend
+                const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+                return `${baseUrl}/uploads/${filename}`;
             }
-        );
-
-        const imageUrl = response.data?.data?.[0]?.url;
-
-        if (!imageUrl) {
-            throw new Error('No image URL returned from NanoBanana API');
-        }
-
-        return imageUrl;
+        } throw new Error('No image data found in Gemini response');
     } catch (error) {
-        if (axios.isAxiosError(error)) {
-            console.error('NanoBanana API error:', error.response?.data || error.message);
-            throw new Error(`NanoBanana API error: ${error.response?.data?.error || error.message}`);
+        console.error('Gemini API error:', error);
+        if (error instanceof Error) {
+            throw new Error(`Image generation failed: ${error.message}`);
         }
-        console.error('Error generating image:', error);
         throw new Error('Failed to generate image');
     }
 }
