@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { generateThumbnailPrompt } from '../utils/openaiPrompt.js';
 import { generateImage } from '../utils/nanoBanana.js';
 import { upload } from '../utils/multerConfig.js';
-import { bufferToDataURL, generatePromptVariations } from '../utils/imageProcessor.js';
+import { generatePromptVariations } from '../utils/imageProcessor.js';
 
 const router = Router();
 
@@ -16,13 +16,13 @@ router.post('/generate-thumbnails', upload.single('photo'), async (req: Request,
             return res.status(400).json({ error: 'Photo is required' });
         }
 
-        // Convert uploaded image to data URL for reference
-        const photoDataURL = bufferToDataURL(file.buffer, file.mimetype);
+        // Convert uploaded image to base64 for Gemini
+        const photoBase64 = file.buffer.toString('base64');
 
         // Create a description based on the video type
         const photoDescription = `Photo uploaded for ${videoType || 'YouTube'} thumbnail`;
 
-        // Generate 3 prompt variations (we'll generate images sequentially to avoid rate limits)
+        // Generate 1 prompt variation for testing (we'll generate images sequentially to avoid rate limits)
         const promptVariations = generatePromptVariations(
             photoDescription,
             videoType || 'YouTube video',
@@ -31,25 +31,29 @@ router.post('/generate-thumbnails', upload.single('photo'), async (req: Request,
             placement || 'center'
         );
 
-        // Generate thumbnails using OpenAI-enhanced prompts (sequentially to avoid rate limits)
+        // Generate thumbnails using OpenAI-enhanced prompts (testing with 1 image first)
         const thumbnails: string[] = [];
 
-        for (const basePrompt of promptVariations) {
-            try {
-                // Enhance prompt with OpenAI
-                const enhancedPrompt = await generateThumbnailPrompt(
-                    basePrompt,
-                    style,
-                    mood
-                );
+        // Only use the first prompt variation for testing
+        if (promptVariations.length === 0) {
+            throw new Error('Failed to generate prompt variations');
+        }
 
-                // Generate image using DALL-E 3
-                const imageUrl = await generateImage(enhancedPrompt);
-                thumbnails.push(imageUrl);
-            } catch (error) {
-                console.error('Error generating thumbnail:', error);
-                // Continue with other variations even if one fails
-            }
+        const basePrompt = promptVariations[0]!;
+        try {
+            // Enhance prompt with OpenAI
+            const enhancedPrompt = await generateThumbnailPrompt(
+                basePrompt,
+                style,
+                mood
+            );
+
+            // Generate image using Gemini with the uploaded photo
+            const imageUrl = await generateImage(enhancedPrompt, photoBase64, file.mimetype);
+            thumbnails.push(imageUrl);
+        } catch (error) {
+            console.error('Error generating thumbnail:', error);
+            throw error; // Throw error since we're only generating one image
         }
 
         if (thumbnails.length === 0) {
