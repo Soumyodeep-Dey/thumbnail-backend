@@ -47,11 +47,40 @@ router.post('/generate-thumbnails', upload.single('photo'), async (req: Request,
         res.status(200).json({
             thumbnails: [imageUrl],
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error generating thumbnails:', error);
-        res.status(500).json({
+        console.error('Error stack:', error?.stack);
+        console.error('Error details:', {
+            message: error?.message,
+            status: error?.status,
+            code: error?.code,
+            error: error?.error,
+        });
+
+        // Extract the actual error message
+        let errorMessage = 'Unknown error occurred';
+        if (error?.message) {
+            errorMessage = error.message;
+        } else if (error?.error?.message) {
+            errorMessage = error.error.message;
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        }
+
+        // Log full error for debugging
+        console.error('Full error object:', JSON.stringify(error, null, 2));
+
+        // Return appropriate status code based on error type
+        const statusCode = error?.status === 429 || error?.error?.code === 429 ? 429 : 500;
+
+        res.status(statusCode).json({
             error: 'Failed to generate thumbnails',
-            message: error instanceof Error ? error.message : 'Unknown error',
+            message: errorMessage,
+            details: process.env.NODE_ENV === 'development' ? {
+                stack: error?.stack,
+                status: error?.status,
+                code: error?.code,
+            } : undefined,
         });
     }
 });

@@ -45,23 +45,29 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
                 apiKey: apiKey
             });
 
-            let imageUrl: string;
+            // Validate that we have an uploaded image (required for this app)
+            if (!uploadedImageBase64 || !mimeType) {
+                throw new Error('Uploaded image is required for thumbnail generation');
+            }
 
-            // If an uploaded image is provided, use Gemini (supports image input)
-            // Otherwise, use Imagen (text-to-image only)
-            if (uploadedImageBase64 && mimeType) {
-                // Use Gemini 2.5 Flash Image model for image-to-image generation
-                const promptContent: any[] = [
-                    { text: prompt },
-                    {
-                        inlineData: {
-                            mimeType: mimeType,
-                            data: uploadedImageBase64,
-                        },
-                    }
-                ];
+            // Use Gemini 2.5 Flash Image model for image-to-image generation
+            const promptContent: any[] = [
+                { text: prompt },
+                {
+                    inlineData: {
+                        mimeType: mimeType,
+                        data: uploadedImageBase64,
+                    },
+                }
+            ];
 
-                const response = await ai.models.generateContent({
+            console.log(`Calling Gemini API with model: gemini-2.5-flash-image`);
+            console.log(`Prompt length: ${prompt.length}, Image size: ${uploadedImageBase64.length} bytes`);
+
+            // Try the API call with proper error handling
+            let response;
+            try {
+                response = await ai.models.generateContent({
                     model: "gemini-2.5-flash-image",
                     contents: promptContent,
                     config: {
@@ -71,71 +77,81 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
                         },
                     }
                 });
-
-                // Extract image data from Gemini response
-                const parts = response.candidates?.[0]?.content?.parts;
-
-                if (!parts || parts.length === 0) {
-                    throw new Error('No content returned from Gemini API');
-                }
-
-                let imageData: string | undefined;
-                for (const part of parts) {
-                    if (part.text) {
-                        console.log('Gemini response:', part.text);
-                    } else if (part.inlineData) {
-                        imageData = part.inlineData.data;
-                        break;
-                    }
-                }
-
-                if (!imageData) {
-                    throw new Error('No image data found in Gemini response');
-                }
-
-                const buffer = Buffer.from(imageData, "base64");
-                imageUrl = await saveImage(buffer);
-            } else {
-                // Use Imagen model for text-to-image generation (no image input)
-                const response = await ai.models.generateImages({
-                    model: 'imagen-4.0-generate-001',
-                    prompt: prompt,
-                    config: {
-                        numberOfImages: 1,
-                        aspectRatio: "16:9", // YouTube thumbnail aspect ratio
-                    },
+            } catch (apiError: any) {
+                console.error('Gemini API call failed:', apiError);
+                console.error('API Error details:', {
+                    message: apiError?.message,
+                    status: apiError?.status,
+                    code: apiError?.code,
+                    error: apiError?.error,
                 });
-
-                if (!response.generatedImages || response.generatedImages.length === 0) {
-                    throw new Error('No images generated from Imagen API');
-                }
-
-                // Get the first generated image
-                const generatedImage = response.generatedImages[0];
-                if (!generatedImage?.image?.imageBytes) {
-                    throw new Error('Image bytes not found in Imagen response');
-                }
-
-                const buffer = Buffer.from(generatedImage.image.imageBytes, "base64");
-                imageUrl = await saveImage(buffer);
+                throw apiError;
             }
+
+            console.log('Gemini API response received');
+
+            // Extract image data from Gemini response
+            const parts = response.candidates?.[0]?.content?.parts;
+
+            if (!parts || parts.length === 0) {
+                throw new Error('No content returned from Gemini API');
+            }
+
+            let imageData: string | undefined;
+            for (const part of parts) {
+                if (part.text) {
+                    console.log('Gemini response text:', part.text);
+                } else if (part.inlineData) {
+                    imageData = part.inlineData.data;
+                    console.log('Found image data in response');
+                    break;
+                }
+            }
+
+            if (!imageData) {
+                console.error('Response parts:', JSON.stringify(parts, null, 2));
+                throw new Error('No image data found in Gemini response');
+            }
+
+            const buffer = Buffer.from(imageData, "base64");
+            const imageUrl = await saveImage(buffer);
 
             return imageUrl;
         } catch (error: any) {
             console.error(`Image generation API error (attempt ${attempt + 1}/${maxRetries}):`, error);
+            console.error('Error details:', {
+                message: error?.message,
+                status: error?.status,
+                code: error?.code,
+                error: error?.error,
+                stack: error?.stack
+            });
 
-            // Check if it's a rate limit error
+            // Check if it's a rate limit error (429) vs quota exhausted
             const isRateLimit = error?.message?.includes('429') ||
                 error?.message?.includes('TooManyRequests') ||
                 error?.status === 429 ||
                 error?.error?.code === 429;
 
+            // Check if it's a quota exhausted error (should not retry)
+            const isQuotaExhausted = error?.message?.includes('quota') ||
+                error?.message?.includes('Quota exceeded') ||
+                error?.error?.message?.includes('quota') ||
+                error?.error?.message?.includes('Quota exceeded');
+
+            // If quota is exhausted, don't retry - throw immediately with clear message
+            if (isQuotaExhausted) {
+                const quotaMessage = 'Your Gemini API quota has been exhausted. Please check your plan and billing details, or wait for the quota to reset.';
+                console.error('Quota exhausted - not retrying:', quotaMessage);
+                throw new Error(quotaMessage);
+            }
+
             // If it's the last attempt or not a rate limit error, throw
             if (attempt === maxRetries - 1 || !isRateLimit) {
-                if (error instanceof Error) {
-                    throw new Error(`Image generation failed: ${error.message}`);
-                }
-                throw new Error('Failed to generate image');
+                const errorMessage = error?.message || error?.error?.message || 'Unknown error';
+                const fullError = error instanceof Error ? error : new Error(errorMessage);
+                console.error('Throwing error:', fullError.message);
+                throw fullError;
             }
 
             // Try to extract retry delay from error response (format: "48.093654311s")
