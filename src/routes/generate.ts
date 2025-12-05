@@ -2,66 +2,50 @@ import { Router, type Request, type Response } from 'express';
 import { generateThumbnailPrompt } from '../utils/openaiPrompt.js';
 import { generateImage } from '../utils/nanoBanana.js';
 import { upload } from '../utils/multerConfig.js';
-import { generatePromptVariations } from '../utils/imageProcessor.js';
 
 const router = Router();
 
 // POST /api/generate-thumbnails (matches frontend)
+// Flow: User input → 1 OpenAI call → 1 Gemini call
 router.post('/generate-thumbnails', upload.single('photo'), async (req: Request, res: Response) => {
     try {
         const { videoType, style, mood, placement } = req.body;
         const file = req.file;
 
+        // Validate all required fields
         if (!file) {
             return res.status(400).json({ error: 'Photo is required' });
+        }
+        if (!videoType || !style || !mood || !placement) {
+            return res.status(400).json({
+                error: 'All fields are required: videoType, style, mood, and placement'
+            });
         }
 
         // Convert uploaded image to base64 for Gemini
         const photoBase64 = file.buffer.toString('base64');
 
-        // Create a description based on the video type
-        const photoDescription = `Photo uploaded for ${videoType || 'YouTube'} thumbnail`;
+        // Create base prompt from user input (no API call - just string manipulation)
+        const basePrompt = `YouTube thumbnail for ${videoType} video, ${style} style, ${mood} mood, subject positioned ${placement}, vibrant colors, high contrast, professional lighting, 4K quality`;
 
-        // Generate 1 prompt variation for testing (we'll generate images sequentially to avoid rate limits)
-        const promptVariations = generatePromptVariations(
-            photoDescription,
-            videoType || 'YouTube video',
-            style || 'professional',
-            mood || 'engaging',
-            placement || 'center'
+        console.log('Step 1: User input received - all fields validated');
+
+        // Step 2: ONE OpenAI call to enhance the prompt
+        console.log('Step 2: Calling OpenAI to enhance prompt...');
+        const enhancedPrompt = await generateThumbnailPrompt(
+            basePrompt,
+            style,
+            mood
         );
+        console.log('Step 2: OpenAI prompt enhancement completed');
 
-        // Generate thumbnails using OpenAI-enhanced prompts (testing with 1 image first)
-        const thumbnails: string[] = [];
-
-        // Only use the first prompt variation for testing
-        if (promptVariations.length === 0) {
-            throw new Error('Failed to generate prompt variations');
-        }
-
-        const basePrompt = promptVariations[0]!;
-        try {
-            // Enhance prompt with OpenAI
-            const enhancedPrompt = await generateThumbnailPrompt(
-                basePrompt,
-                style,
-                mood
-            );
-
-            // Generate image using Gemini with the uploaded photo
-            const imageUrl = await generateImage(enhancedPrompt, photoBase64, file.mimetype);
-            thumbnails.push(imageUrl);
-        } catch (error) {
-            console.error('Error generating thumbnail:', error);
-            throw error; // Throw error since we're only generating one image
-        }
-
-        if (thumbnails.length === 0) {
-            throw new Error('Failed to generate any thumbnails');
-        }
+        // Step 3: ONE Gemini call to generate the image
+        console.log('Step 3: Calling Gemini/Banana to generate image...');
+        const imageUrl = await generateImage(enhancedPrompt, photoBase64, file.mimetype);
+        console.log('Step 3: Image generation completed');
 
         res.status(200).json({
-            thumbnails,
+            thumbnails: [imageUrl],
         });
     } catch (error) {
         console.error('Error generating thumbnails:', error);

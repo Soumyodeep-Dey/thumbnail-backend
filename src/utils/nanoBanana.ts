@@ -96,7 +96,8 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
             // Check if it's a rate limit error
             const isRateLimit = error?.message?.includes('429') ||
                 error?.message?.includes('TooManyRequests') ||
-                error?.status === 429;
+                error?.status === 429 ||
+                error?.error?.code === 429;
 
             // If it's the last attempt or not a rate limit error, throw
             if (attempt === maxRetries - 1 || !isRateLimit) {
@@ -106,9 +107,25 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
                 throw new Error('Failed to generate image');
             }
 
-            // Wait before retrying (exponential backoff)
-            const delayTime = baseDelay * Math.pow(2, attempt);
-            console.log(`Rate limited. Retrying in ${delayTime}ms...`);
+            // Try to extract retry delay from error response (format: "48.093654311s")
+            let delayTime = baseDelay;
+            try {
+                const errorDetails = error?.error?.details;
+                if (errorDetails && Array.isArray(errorDetails)) {
+                    const retryInfo = errorDetails.find((d: any) => d['@type']?.includes('RetryInfo'));
+                    if (retryInfo?.retryDelay) {
+                        // Parse delay string (e.g., "48.093654311s") and convert to milliseconds
+                        const delayStr = retryInfo.retryDelay.toString().replace('s', '');
+                        delayTime = parseFloat(delayStr) * 1000;
+                        console.log(`API suggests retry delay: ${Math.round(delayTime / 1000)}s`);
+                    }
+                }
+            } catch (e) {
+                // Fallback to exponential backoff if we can't parse the delay
+                delayTime = baseDelay * Math.pow(2, attempt);
+            }
+
+            console.log(`Rate limited. Retrying in ${Math.round(delayTime / 1000)}s...`);
             await delay(delayTime);
         }
     }
