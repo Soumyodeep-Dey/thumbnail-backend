@@ -5,6 +5,29 @@ import * as path from "node:path";
 // Helper function to delay execution
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Helper function to save image buffer to file
+async function saveImage(buffer: Buffer): Promise<string> {
+    // Create a unique filename
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    const filename = `thumbnail-${timestamp}-${random}.png`;
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+
+    // Create uploads directory if it doesn't exist
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const filepath = path.join(uploadsDir, filename);
+    fs.writeFileSync(filepath, buffer);
+
+    console.log(`Image saved as ${filename}`);
+
+    // Return the full URL that can be accessed from frontend
+    const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+    return `${baseUrl}/uploads/${filename}`;
+}
+
 export async function generateImage(prompt: string, uploadedImageBase64?: string, mimeType?: string): Promise<string> {
     const maxRetries = 3;
     const baseDelay = 2000; // 2 seconds
@@ -22,76 +45,84 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
                 apiKey: apiKey
             });
 
-            // Build the prompt array with text and optional image
-            const promptContent: any[] = [
-                { text: prompt }
-            ];
+            let imageUrl: string;
 
-            // If an uploaded image is provided, add it to the prompt
+            // If an uploaded image is provided, use Gemini (supports image input)
+            // Otherwise, use Imagen (text-to-image only)
             if (uploadedImageBase64 && mimeType) {
-                promptContent.push({
-                    inlineData: {
-                        mimeType: mimeType,
-                        data: uploadedImageBase64,
+                // Use Gemini 2.5 Flash Image model for image-to-image generation
+                const promptContent: any[] = [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: uploadedImageBase64,
+                        },
+                    }
+                ];
+
+                const response = await ai.models.generateContent({
+                    model: "gemini-2.5-flash-image",
+                    contents: promptContent,
+                    config: {
+                        responseModalities: ['Image'],
+                        imageConfig: {
+                            aspectRatio: "16:9", // 1344x768 resolution, 1290 tokens
+                        },
+                    }
+                });
+
+                // Extract image data from Gemini response
+                const parts = response.candidates?.[0]?.content?.parts;
+
+                if (!parts || parts.length === 0) {
+                    throw new Error('No content returned from Gemini API');
+                }
+
+                let imageData: string | undefined;
+                for (const part of parts) {
+                    if (part.text) {
+                        console.log('Gemini response:', part.text);
+                    } else if (part.inlineData) {
+                        imageData = part.inlineData.data;
+                        break;
+                    }
+                }
+
+                if (!imageData) {
+                    throw new Error('No image data found in Gemini response');
+                }
+
+                const buffer = Buffer.from(imageData, "base64");
+                imageUrl = await saveImage(buffer);
+            } else {
+                // Use Imagen model for text-to-image generation (no image input)
+                const response = await ai.models.generateImages({
+                    model: 'imagen-4.0-generate-001',
+                    prompt: prompt,
+                    config: {
+                        numberOfImages: 1,
+                        aspectRatio: "16:9", // YouTube thumbnail aspect ratio
                     },
                 });
-            }
 
-            // Generate image using Gemini 2.5 Flash Image model
-            // 16:9 aspect ratio (1344x768) uses 1290 tokens per generation
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash-image",
-                contents: promptContent,
-                config: {
-                    responseModalities: ['Image'],
-                    imageConfig: {
-                        aspectRatio: "16:9", // 1344x768 resolution, 1290 tokens
-                    },
+                if (!response.generatedImages || response.generatedImages.length === 0) {
+                    throw new Error('No images generated from Imagen API');
                 }
-            });
 
-            // Extract image data from response
-            const parts = response.candidates?.[0]?.content?.parts;
-
-            if (!parts || parts.length === 0) {
-                throw new Error('No content returned from Gemini API');
-            }
-
-            for (const part of parts) {
-                if (part.text) {
-                    console.log('Gemini response:', part.text);
-                } else if (part.inlineData) {
-                    const imageData = part.inlineData.data;
-                    if (!imageData) {
-                        throw new Error('Image data is undefined');
-                    }
-                    const buffer = Buffer.from(imageData, "base64");
-
-                    // Create a unique filename
-                    const timestamp = Date.now();
-                    const random = Math.floor(Math.random() * 1000);
-                    const filename = `thumbnail-${timestamp}-${random}.png`;
-                    const uploadsDir = path.join(process.cwd(), 'uploads');
-
-                    // Create uploads directory if it doesn't exist
-                    if (!fs.existsSync(uploadsDir)) {
-                        fs.mkdirSync(uploadsDir, { recursive: true });
-                    }
-
-                    const filepath = path.join(uploadsDir, filename);
-                    fs.writeFileSync(filepath, buffer);
-
-                    console.log(`Image saved as ${filename}`);
-
-                    // Return the full URL that can be accessed from frontend
-                    const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
-                    return `${baseUrl}/uploads/${filename}`;
+                // Get the first generated image
+                const generatedImage = response.generatedImages[0];
+                if (!generatedImage?.image?.imageBytes) {
+                    throw new Error('Image bytes not found in Imagen response');
                 }
+
+                const buffer = Buffer.from(generatedImage.image.imageBytes, "base64");
+                imageUrl = await saveImage(buffer);
             }
 
-            throw new Error('No image data found in Gemini response');
+            return imageUrl;
         } catch (error: any) {
-            console.error(`Gemini API error (attempt ${attempt + 1}/${maxRetries}):`, error);
+            console.error(`Image generation API error (attempt ${attempt + 1}/${maxRetries}):`, error);
 
             // Check if it's a rate limit error
             const isRateLimit = error?.message?.includes('429') ||
