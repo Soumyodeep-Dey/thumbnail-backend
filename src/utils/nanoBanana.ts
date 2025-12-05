@@ -51,7 +51,8 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
             }
 
             // Use Gemini 2.5 Flash Image model for image-to-image generation
-            const promptContent: any[] = [
+            // Structure matches the official example: text prompt + image inlineData
+            const promptContent = [
                 { text: prompt },
                 {
                     inlineData: {
@@ -64,33 +65,16 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
             console.log(`Calling Gemini API with model: gemini-2.5-flash-image`);
             console.log(`Prompt length: ${prompt.length}, Image size: ${uploadedImageBase64.length} bytes`);
 
-            // Try the API call with proper error handling
-            let response;
-            try {
-                response = await ai.models.generateContent({
-                    model: "gemini-2.5-flash-image",
-                    contents: promptContent,
-                    config: {
-                        responseModalities: ['Image'],
-                        imageConfig: {
-                            aspectRatio: "16:9", // 1344x768 resolution, 1290 tokens
-                        },
-                    }
-                });
-            } catch (apiError: any) {
-                console.error('Gemini API call failed:', apiError);
-                console.error('API Error details:', {
-                    message: apiError?.message,
-                    status: apiError?.status,
-                    code: apiError?.code,
-                    error: apiError?.error,
-                });
-                throw apiError;
-            }
+            // API call matching the official example structure
+            // Note: The model automatically generates images when given image input
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash-image",
+                contents: promptContent,
+            });
 
             console.log('Gemini API response received');
 
-            // Extract image data from Gemini response
+            // Extract image data from Gemini response (matching example structure)
             const parts = response.candidates?.[0]?.content?.parts;
 
             if (!parts || parts.length === 0) {
@@ -109,8 +93,8 @@ export async function generateImage(prompt: string, uploadedImageBase64?: string
             }
 
             if (!imageData) {
-                console.error('Response parts:', JSON.stringify(parts, null, 2));
-                throw new Error('No image data found in Gemini response');
+                console.error('Response parts structure:', JSON.stringify(parts, null, 2));
+                throw new Error('No image data found in Gemini response. The API may have returned text instead of an image.');
             }
 
             const buffer = Buffer.from(imageData, "base64");
